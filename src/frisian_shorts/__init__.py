@@ -2,6 +2,7 @@
 # Usage: frisian-shorts [puzzle_id] [--upload]   (see --help)
 import argparse
 import json
+import math
 import subprocess
 import tempfile
 import urllib.error
@@ -23,12 +24,15 @@ ASSETS = Path(__file__).parent / "assets"
 FONT_TITLE = str(ASSETS / "Nunito-Black.ttf")
 FONT_BOLD = str(ASSETS / "Poppins-ExtraBold.ttf")  # side-to-play label, logo
 FONT = str(ASSETS / "Poppins-SemiBold.ttf")  # credit line, square numbers
-TITLE = "Find the best move!"
+TITLE = "Find the best move!"  # during countdowns
+SOLUTION_TITLE = "Solution"  # while the solution plays; the label under it shows each move
+END_TITLE, END_LABEL = "{color} wins!", "FOUND A DIFFERENT SOLUTION? COMMENT BELOW"
 SLIDE_SECONDS = 0.25  # slide time per step; a multi-capture has one step per jump
 STEP_PAUSE_SECONDS = 0.15  # pause between steps of the same move
-THINK_SECONDS = 3.0  # countdown after the opponent's move, before the solution starts
+THINK_SECONDS = 5.0  # countdown after the opponent's move, before the solution starts
+LATER_THINK_SECONDS = 3.0  # countdown before each later solver move that isn't a capture
 HOLD_SECONDS = 1.0  # after each solution move
-END_SECONDS = 2.0
+END_SECONDS = 2.5
 SOUND_VOLUME = 0.25  # move/capture sounds from assets/move.ogg and assets/capture.ogg
 
 # YouTube upload (--upload), filled in from the puzzle data: {id}, {rating}, {color}, {attempts}
@@ -38,10 +42,12 @@ YT_DESCRIPTION = "Rated {rating}, {color} to play.\n\nPuzzle from https://lidrau
 YT_TAGS = ["frisian draughts", "draughts", "checkers", "puzzle", "dammen", "frysk"]
 PUBLISH_AT, PUBLISH_TZ = time(18, 0), ZoneInfo("Europe/Amsterdam")  # uploads go public at the next 18:00 Dutch time
 
-# layout: board centered horizontally, kept above the bottom area the Shorts UI covers
-BOARD_PX = 960
-BOARD_XY = ((WIDTH - BOARD_PX) // 2, 420)
-TIMER_Y = BOARD_XY[1] + BOARD_PX + 48
+# layout: the Shorts UI covers roughly the bottom 360px (captions) and the right edge's lower half (buttons),
+# so the board is a bit narrower than the frame and everything ends above the captions
+BOARD_PX = 880
+BOARD_XY = ((WIDTH - BOARD_PX) // 2, 400)
+HEADER_H, LABEL_Y = BOARD_XY[1] - 30, 318  # strip above the board with the title and the label under it
+TIMER_Y, TIMER_H = BOARD_XY[1] + BOARD_PX + 40, 30
 TIMER_START, TIMER_END = (90, 200, 120), (230, 80, 70)
 
 # board look
@@ -51,6 +57,8 @@ LIGHT, DARK, FRAME, NUMBER = (238, 220, 190), (160, 112, 72), (66, 40, 22), (196
 HIGHLIGHT = (255, 210, 60, 110)
 PIECE = {"W": ((248, 243, 232), (184, 170, 146)), "B": ((60, 54, 52), (20, 16, 16))}  # face, rim
 CROWN = (240, 190, 50)
+
+font = cache(ImageFont.truetype)  # the same few fonts are used on many frames
 
 
 def fetch_puzzle(puzzle_id=None):
@@ -130,11 +138,10 @@ def jumped(pieces, a, b):
 def board_bg(flip):
     img = Image.new("RGB", (BOARD_PX, BOARD_PX), LIGHT)
     d = ImageDraw.Draw(img)
-    font = ImageFont.truetype(FONT, SQ // 6)
     for n in range(1, 51):
         x, y = square_xy(n, flip)
         d.rectangle((x, y, x + SQ - 1, y + SQ - 1), fill=DARK)
-        d.text((x + 6, y + 4), str(n), font=font, fill=NUMBER)
+        d.text((x + 6, y + 4), str(n), font=font(FONT, SQ // 6), fill=NUMBER)
     # wood grain: noise stretched along the rows, soft-light blended
     grain = Image.effect_noise((BOARD_PX // 24, BOARD_PX // 4), 12).resize(img.size, Image.BICUBIC)
     return ImageChops.soft_light(img, grain.convert("RGB"))
@@ -200,36 +207,44 @@ def draw_board(pieces, flip, highlight=(), mover=None):
 
 
 def boards(data):
-    """Yield (board image, seconds on screen, tag): the opponent's last move, then the solution's main line.
+    """Yield (board image, seconds on screen, tag, header): the opponent's last move, then the solution.
 
     tag is "move"/"capture" on the frame a piece lands (for sound), "think" for a countdown, else None.
+    header is (title, label, dark label) for the strip above the board.
     There's a countdown before the solver's first move and before each later one that isn't a capture.
     """
     puzzle = data["puzzle"]
     flip, solver = puzzle["color"] == "black", puzzle["color"][0].upper()
+    prompt = (TITLE, f"{puzzle['color'].upper()} TO PLAY", flip)
     nodes, node = [data["history"]], puzzle["branch"]
     while node:
         nodes.append(node)
         node = node["children"][0] if node["children"] else None
 
-    pieces, side, trail = parse_fen(puzzle["fen"]), puzzle["fen"][0], []
+    pieces, side, trail, head = parse_fen(puzzle["fen"]), puzzle["fen"][0], [], prompt
     frame = draw_board(pieces, flip)
-    yield frame, 0.5, None
+    yield frame, 0.5, None, head
     steps = round(SLIDE_SECONDS * FPS)
     for i, node in enumerate(nodes):
         path = uci_path(node["uci"])
+        if not trail:  # a new move, not the next step of a multi-capture split over nodes
+            move_captures = jumped(pieces, path[0], path[1]) is not None
         trail += path
+        if i:  # solution: the label shows the move so far, e.g. 17-21 or 6x26x46
+            squares = [n for k, n in enumerate(trail) if not k or n != trail[k - 1]]
+            label = "x".join(map(str, squares)) if move_captures else f"{squares[0]}-{squares[-1]}"
+            head = (SOLUTION_TITLE, label, side == "B")
         piece = pieces.pop(path[0])
         for k, (a, b) in enumerate(pairwise(path)):
             if k:
-                yield frame, STEP_PAUSE_SECONDS, None
+                yield frame, STEP_PAUSE_SECONDS, None, head
             captured = jumped(pieces, a, b)
             (x0, y0), (x1, y1) = square_xy(a, flip), square_xy(b, flip)
             for s in range(1, steps + 1):
                 t = s / steps
                 t = t * t * (3 - 2 * t)  # ease in-out
                 frame = draw_board(pieces, flip, trail, mover=(x0 + (x1 - x0) * t, y0 + (y1 - y0) * t, piece))
-                yield frame, 1 / FPS, ("move" if captured is None else "capture") if s == steps else None
+                yield frame, 1 / FPS, ("move" if captured is None else "capture") if s == steps else None, head
             if captured is not None:
                 color, role = pieces[captured]
                 pieces[captured] = (color, {"M": "G", "K": "P"}.get(role, role))
@@ -237,29 +252,55 @@ def boards(data):
         pieces = parse_fen(node["fen"])
         frame = draw_board(pieces, flip, trail)
         if node["fen"][0] == side:  # same side still to move: lidraughts split a multi-capture over several nodes
-            yield frame, STEP_PAUSE_SECONDS, None
+            yield frame, STEP_PAUSE_SECONDS, None, head
         else:
             side, trail = node["fen"][0], []
             nxt = nodes[i + 1] if i + 1 < len(nodes) else None
             # ponytail: treats every capture as forced (captures are mandatory); a real move generator
             # would also catch a choice between captures, or a quiet move that is the only legal one
             if nxt and side == solver and (i == 0 or jumped(pieces, *uci_path(nxt["uci"])[:2]) is None):
-                yield frame, THINK_SECONDS, "think"
+                yield frame, THINK_SECONDS if i == 0 else LATER_THINK_SECONDS, "think", prompt
             else:
-                yield frame, HOLD_SECONDS, None
-    yield frame, END_SECONDS, None
+                yield frame, HOLD_SECONDS, None, head
+    yield frame, END_SECONDS, None, (END_TITLE.format(color=puzzle["color"].capitalize()), END_LABEL, flip)
 
 
-def draw_timer(frame, left):
-    """Countdown bar under the board, shrinking toward the center and going from green to red."""
+def draw_header(strip, title, label, dark):
+    """Draw the title (soft drop shadow) and a pill-shaped label under it onto the strip above the board."""
+    d = ImageDraw.Draw(strip)
+    size = 120  # as large as TITLE fits; the other titles are shorter and use the same size
+    while font(FONT_TITLE, size).getlength(TITLE) > WIDTH - 120:
+        size -= 2
+    shadow = Image.new("L", strip.size, 0)
+    ImageDraw.Draw(shadow).text((WIDTH // 2, 158), title, font=font(FONT_TITLE, size), anchor="ma", fill=170)
+    strip.paste((0, 0, 0), mask=shadow.filter(ImageFilter.GaussianBlur(7)))
+    d.text((WIDTH // 2, 150), title, font=font(FONT_TITLE, size), anchor="ma", fill="white")
+    fg, bg = ("#f8f3e8", "#1c1816") if dark else ("#0b1a33", "#f8f3e8")
+    x0, y0, x1, y1 = d.textbbox((WIDTH // 2, LABEL_Y), label, font=font(FONT_BOLD, 40), anchor="mm")
+    d.rounded_rectangle((x0 - 32, y0 - 20, x1 + 32, y1 + 20), radius=40, fill=bg)
+    d.text((WIDTH // 2, LABEL_Y), label, font=font(FONT_BOLD, 40), anchor="mm", fill=fg)
+    return strip
+
+
+def draw_timer(frame, left, seconds):
+    """Countdown bar under the board with the seconds left on it; shrinks toward the center, green to red."""
     img = frame.copy()
     d = ImageDraw.Draw(img, "RGBA")
-    x0, x1 = BOARD_XY[0] - 22, BOARD_XY[0] + BOARD_PX + 22
-    d.rounded_rectangle((x0, TIMER_Y, x1, TIMER_Y + 14), 7, fill=(255, 255, 255, 40))
+    x0, x1, y0, y1, r = BOARD_XY[0] - 22, BOARD_XY[0] + BOARD_PX + 22, TIMER_Y, TIMER_Y + TIMER_H, TIMER_H // 2
+    d.rounded_rectangle((x0, y0, x1, y1), r, fill=(255, 255, 255, 40))
     half = (x1 - x0) * left / 2
-    if half > 7:
+    if half > r:
         color = tuple(round(e + (s - e) * left) for s, e in zip(TIMER_START, TIMER_END))
-        d.rounded_rectangle((WIDTH / 2 - half, TIMER_Y, WIDTH / 2 + half, TIMER_Y + 14), 7, fill=color)
+        d.rounded_rectangle((WIDTH / 2 - half, y0, WIDTH / 2 + half, y1), r, fill=color)
+    d.text(
+        (WIDTH / 2, (y0 + y1) / 2),
+        str(math.ceil(seconds)),
+        font=font(FONT_BOLD, 26),
+        anchor="mm",
+        fill="white",
+        stroke_width=2,
+        stroke_fill=(8, 20, 45),
+    )
     return img
 
 
@@ -278,25 +319,9 @@ def add_sounds(video, sounds, out):
 
 
 def make_base(puzzle):
+    """Everything that stays the same for the whole video; the header strip and the board go on top."""
     base = ImageOps.fit(Image.open(ASSETS / "background.png").convert("RGB"), (WIDTH, HEIGHT))
     d = ImageDraw.Draw(base, "RGBA")
-    # title: as large as fits the width, with a soft drop shadow
-    size = 120
-    while ImageFont.truetype(FONT_TITLE, size).getlength(TITLE) > WIDTH - 120:
-        size -= 2
-    font = ImageFont.truetype(FONT_TITLE, size)
-    shadow = Image.new("L", base.size, 0)
-    ImageDraw.Draw(shadow).text((WIDTH // 2, 158), TITLE, font=font, anchor="ma", fill=170)
-    base.paste((0, 0, 0), mask=shadow.filter(ImageFilter.GaussianBlur(7)))
-    d.text((WIDTH // 2, 150), TITLE, font=font, anchor="ma", fill="white")
-    label_y = d.textbbox((WIDTH // 2, 150), TITLE, font=font, anchor="ma")[3] + 70
-
-    # side to play
-    text = f"{puzzle['color'].upper()} TO PLAY"
-    fg, bg = ("#0b1a33", "#f8f3e8") if puzzle["color"] == "white" else ("#f8f3e8", "#1c1816")
-    x0, y0, x1, y1 = d.textbbox((WIDTH // 2, label_y), text, font=ImageFont.truetype(FONT_BOLD, 40), anchor="mm")
-    d.rounded_rectangle((x0 - 32, y0 - 20, x1 + 32, y1 + 20), radius=40, fill=bg)
-    d.text((WIDTH // 2, label_y), text, font=ImageFont.truetype(FONT_BOLD, 40), anchor="mm", fill=fg)
 
     # board frame with drop shadow
     bx, by = BOARD_XY
@@ -308,13 +333,13 @@ def make_base(puzzle):
 
     # logo and credit under the countdown bar
     logo = Image.open(ASSETS / "logo.png")
-    ly = TIMER_Y + 46
+    ly = TIMER_Y + TIMER_H + 30
     base.paste(logo, ((WIDTH - logo.width) // 2, ly), logo)
     credit = f"Puzzle #{puzzle['id']} · rated {puzzle['rating']} · lidraughts.org"
     d.text(
         (WIDTH // 2, ly + logo.height + 22),
         credit,
-        font=ImageFont.truetype(FONT, 26),
+        font=font(FONT, 26),
         anchor="ma",
         fill=(160, 185, 220),
     )
@@ -349,15 +374,20 @@ def main():
         silent = f"{tmp}/silent.mp4"
         writer = imageio_ffmpeg.write_frames(silent, (WIDTH, HEIGHT), fps=FPS, macro_block_size=1)
         writer.send(None)
-        for board, seconds, tag in boards(data):
+        headers = {}  # header strip per distinct (title, label, dark label)
+        for board, seconds, tag, head in boards(data):
+            if head not in headers:
+                headers[head] = draw_header(base.crop((0, 0, WIDTH, HEADER_H)), *head)
             frame = base.copy()
+            frame.paste(headers[head], (0, 0))
             frame.paste(board, BOARD_XY)
             frames = max(1, round(seconds * FPS))
             if tag in ("move", "capture"):
                 sounds.append((n / FPS, tag))
             raw = frame.tobytes()
             for f in range(frames):
-                writer.send(draw_timer(frame, 1 - f / frames).tobytes() if tag == "think" else raw)
+                left = 1 - f / frames
+                writer.send(draw_timer(frame, left, seconds * left).tobytes() if tag == "think" else raw)
             n += frames
         writer.close()
         add_sounds(silent, sounds, out)

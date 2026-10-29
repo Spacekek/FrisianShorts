@@ -6,6 +6,7 @@ import pytest
 
 import frisian_shorts
 from frisian_shorts import (
+    END_LABEL,
     SQ,
     boards,
     jumped,
@@ -52,7 +53,14 @@ def test_board_tags():
         },
         "history": {"uci": "1822", "fen": "W:W27:B22:H0:F1"},
     }
-    assert [tag for _, _, tag in boards(data) if tag] == ["move", "think", "capture"]
+    yields = list(boards(data))
+    assert [tag for _, _, tag, _ in yields if tag] == ["move", "think", "capture"]
+    # header labels in order: prompt, the solution move, the end card
+    assert [label for _, label, _ in dict.fromkeys(head for *_, head in yields)] == [
+        "WHITE TO PLAY",
+        "27x18",
+        END_LABEL,
+    ]
 
 
 def test_read_uploaded(tmp_path):
@@ -94,7 +102,7 @@ def test_countdown_before_later_quiet_moves(uci, fen, tags):
         },
         "history": {"uci": "0510", "fen": "W:W25,48:B10:H0:F1"},
     }
-    assert [tag for _, _, tag in boards(data) if tag] == tags
+    assert [tag for _, _, tag, _ in boards(data) if tag] == tags
 
 
 def test_next_publish_time():
