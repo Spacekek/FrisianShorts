@@ -1,0 +1,31 @@
+name: daily short
+
+on:
+  schedule:
+    - cron: "23 6 * * *" # once a day (UTC), off the hour when GitHub's scheduler is busiest
+  workflow_dispatch:
+
+permissions:
+  contents: write # to commit uploaded.txt
+
+concurrency: daily-short # two runs at once would pick the same puzzle
+
+jobs:
+  render-and-upload:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10
+      # picks the lowest puzzle id not in uploaded.txt, uploads it and appends the id
+      - run: uv run --locked --no-dev frisian-shorts --upload
+        env:
+          YOUTUBE_CLIENT_ID: ${{ secrets.YOUTUBE_CLIENT_ID }}
+          YOUTUBE_CLIENT_SECRET: ${{ secrets.YOUTUBE_CLIENT_SECRET }}
+          YOUTUBE_REFRESH_TOKEN: ${{ secrets.YOUTUBE_REFRESH_TOKEN }}
+      - name: Commit uploaded.txt
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -am "Upload puzzle $(tail -n 1 uploaded.txt)"
+          git pull --rebase
+          git push

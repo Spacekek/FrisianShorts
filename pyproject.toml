@@ -1,0 +1,29 @@
+[project]
+name = "frisian-shorts"
+version = "0.1.0"
+description = "Render lidraughts Frisian puzzles as vertical short videos"
+readme = "readme.md"
+requires-python = ">=3.12"
+dependencies = [
+    "imageio-ffmpeg>=0.7.0",
+    "pillow>=13.0.0",
+]
+
+[project.scripts]
+frisian-shorts = "frisian_shorts:main"
+
+[build-system]
+requires = ["uv_build>=0.13.3,<0.14"]
+build-backend = "uv_build"
+
+[tool.ruff]
+line-length = 120
+
+[tool.ruff.lint]
+extend-select = ["I"]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.2.0",
+    "ruff>=0.17.3",
+]

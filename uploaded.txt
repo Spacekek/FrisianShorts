@@ -1,0 +1,3 @@
+# Puzzle ids already uploaded to YouTube, one per line. `frisian-shorts --upload` skips these,
+# picks the lowest id that isn't listed, and appends it here after uploading.
+# Add an id to skip that puzzle; remove one to allow uploading it again.
