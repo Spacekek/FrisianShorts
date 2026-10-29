@@ -15,7 +15,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v10
+      - uses: astral-sh/setup-uv@v10.3.3 # no v10 shortcut tag exists, only exact versions
       # picks the lowest puzzle id not in uploaded.txt, uploads it and appends the id
       - run: uv run --locked --no-dev frisian-shorts --upload
         env:
