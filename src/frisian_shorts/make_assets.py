@@ -1,5 +1,7 @@
 # Generates assets/background.png, assets/logo.png and assets/avatar.png (channel picture).
 # Run: uv run python -m frisian_shorts.make_assets
+import random
+
 from PIL import Image, ImageChops, ImageDraw, ImageFilter, ImageFont
 
 from frisian_shorts import ASSETS, DARK, FONT_BOLD, HEIGHT, LIGHT, WIDTH, sprite
@@ -36,8 +38,9 @@ def background():
     ImageDraw.Draw(mask).ellipse((-W * 0.35, -H * 0.1, W * 1.35, H * 1.1), fill=255)
     bg = Image.composite(bg, Image.new("RGBA", (W, H), (2, 6, 16, 255)), mask.filter(ImageFilter.GaussianBlur(160)))
 
-    # fine noise so the gradients don't band after video compression
-    bg = ImageChops.soft_light(bg.convert("RGB"), Image.effect_noise((W, H), 6).convert("RGB"))
+    # fine noise so the gradients don't band after video compression; seeded, so the PNG only changes with the design
+    noise = Image.frombytes("L", (W, H), random.Random(0).randbytes(W * H)).point(lambda v: 118 + v * 20 // 255)
+    bg = ImageChops.soft_light(bg.convert("RGB"), noise.convert("RGB"))
     bg.save(ASSETS / "background.png", optimize=True)
 
 

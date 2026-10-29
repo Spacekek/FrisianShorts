@@ -26,19 +26,23 @@ FONT_BOLD = str(ASSETS / "Poppins-ExtraBold.ttf")  # side-to-play label, logo
 FONT = str(ASSETS / "Poppins-SemiBold.ttf")  # credit line, square numbers
 TITLE = "Find the best move!"  # during countdowns
 SOLUTION_TITLE = "Solution"  # while the solution plays; the label under it shows each move
-END_TITLE, END_LABEL = "{color} wins!", "FOUND A DIFFERENT SOLUTION? COMMENT BELOW"
+END_TITLE, END_LABEL = "Puzzle solved!", "FOUND A DIFFERENT SOLUTION? COMMENT BELOW"  # titles may use {color}
 SLIDE_SECONDS = 0.25  # slide time per step; a multi-capture has one step per jump
 STEP_PAUSE_SECONDS = 0.15  # pause between steps of the same move
 THINK_SECONDS = 5.0  # countdown after the opponent's move, before the solution starts
 LATER_THINK_SECONDS = 3.0  # countdown before each later solver move that isn't a capture
 HOLD_SECONDS = 1.0  # after each solution move
 END_SECONDS = 2.5
-SOUND_VOLUME = 0.25  # move/capture sounds from assets/move.ogg and assets/capture.ogg
+SOUND_VOLUME = 0.25  # sounds from assets/: move.ogg, capture.ogg and tick.ogg (countdown)
+TICK_VOLUME = 0.5  # countdown ticks, relative to the move sounds
 
 # YouTube upload (--upload), filled in from the puzzle data: {id}, {rating}, {color}, {attempts}
 UPLOADED = Path("uploaded.txt")  # puzzle ids already uploaded; --upload skips them and appends the new one
 YT_TITLE = "Frisian draughts puzzle #{id}: find the best move! #shorts"
-YT_DESCRIPTION = "Rated {rating}, {color} to play.\n\nPuzzle from https://lidraughts.org/training/frisian/{id}"
+YT_DESCRIPTION = (
+    "Rated {rating}, {color} to play.\n\nPuzzle from https://lidraughts.org/training/frisian/{id}\n\n"
+    "#draughts #checkers #puzzle #brainteaser #dammen #frisiandraughts"
+)
 YT_TAGS = ["frisian draughts", "draughts", "checkers", "puzzle", "dammen", "frysk"]
 PUBLISH_AT, PUBLISH_TZ = time(18, 0), ZoneInfo("Europe/Amsterdam")  # uploads go public at the next 18:00 Dutch time
 
@@ -222,8 +226,7 @@ def boards(data):
         node = node["children"][0] if node["children"] else None
 
     pieces, side, trail, head = parse_fen(puzzle["fen"]), puzzle["fen"][0], [], prompt
-    frame = draw_board(pieces, flip)
-    yield frame, 0.5, None, head
+    frame = draw_board(pieces, flip)  # the opponent's move starts on the very first frame, no hold
     steps = round(SLIDE_SECONDS * FPS)
     for i, node in enumerate(nodes):
         path = uci_path(node["uci"])
@@ -276,9 +279,12 @@ def draw_header(strip, title, label, dark):
     strip.paste((0, 0, 0), mask=shadow.filter(ImageFilter.GaussianBlur(7)))
     d.text((WIDTH // 2, 150), title, font=font(FONT_TITLE, size), anchor="ma", fill="white")
     fg, bg = ("#f8f3e8", "#1c1816") if dark else ("#0b1a33", "#f8f3e8")
-    x0, y0, x1, y1 = d.textbbox((WIDTH // 2, LABEL_Y), label, font=font(FONT_BOLD, 40), anchor="mm")
+    size = 40  # smaller for long labels, so the pill keeps a margin to the frame edges
+    while font(FONT_BOLD, size).getlength(label) > WIDTH - 200:
+        size -= 2
+    x0, y0, x1, y1 = d.textbbox((WIDTH // 2, LABEL_Y), label, font=font(FONT_BOLD, size), anchor="mm")
     d.rounded_rectangle((x0 - 32, y0 - 20, x1 + 32, y1 + 20), radius=40, fill=bg)
-    d.text((WIDTH // 2, LABEL_Y), label, font=font(FONT_BOLD, 40), anchor="mm", fill=fg)
+    d.text((WIDTH // 2, LABEL_Y), label, font=font(FONT_BOLD, size), anchor="mm", fill=fg)
     return strip
 
 
@@ -305,11 +311,14 @@ def draw_timer(frame, left, seconds):
 
 
 def add_sounds(video, sounds, out):
-    """Mix a move/capture sound in at each (seconds, name); the video stream is copied, not re-encoded."""
+    """Mix assets/<name>.ogg in at each (seconds, name); the video stream is copied, not re-encoded."""
     cmd = [imageio_ffmpeg.get_ffmpeg_exe(), "-nostdin", "-y", "-loglevel", "error", "-i", video]
     for _, name in sounds:
         cmd += ["-i", str(ASSETS / f"{name}.ogg")]
-    mix = "".join(f"[{i + 1}]adelay={round(t * 1000)}:all=1[s{i}];" for i, (t, _) in enumerate(sounds))
+    mix = "".join(
+        f"[{i + 1}]adelay={round(t * 1000)}:all=1,volume={TICK_VOLUME if name == 'tick' else 1}[s{i}];"
+        for i, (t, name) in enumerate(sounds)
+    )
     mix += (
         "".join(f"[s{i}]" for i in range(len(sounds)))
         + f"amix=inputs={len(sounds)}:normalize=0,volume={SOUND_VOLUME}[a]"
@@ -384,6 +393,8 @@ def main():
             frames = max(1, round(seconds * FPS))
             if tag in ("move", "capture"):
                 sounds.append((n / FPS, tag))
+            if tag == "think":  # a tick each time the countdown number drops, not on its first or last frame
+                sounds += [(n / FPS + k, "tick") for k in range(1, math.ceil(seconds))]
             raw = frame.tobytes()
             for f in range(frames):
                 left = 1 - f / frames
