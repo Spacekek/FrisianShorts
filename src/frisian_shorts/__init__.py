@@ -92,6 +92,7 @@ def next_puzzle(done, tries=3):
         except urllib.error.HTTPError as e:
             if e.code != 404:
                 raise
+            print(f"puzzle {pid} doesn't exist on lidraughts, trying the next id")
     raise SystemExit(f"no puzzle found in {tries} tries; have all puzzles been uploaded?")
 
 
@@ -377,6 +378,7 @@ def main():
     data = next_puzzle(done) if args.upload and not args.puzzle_id else fetch_puzzle(args.puzzle_id)
     puzzle = data["puzzle"]
     out = f"puzzle_{puzzle['id']}.mp4"
+    print(f"puzzle {puzzle['id']}: rated {puzzle['rating']}, {puzzle['color']} to play; rendering {out}")
     base = make_base(puzzle)
     sounds, n = [], 0  # (seconds, "move"/"capture") per landing; n counts frames written
     with tempfile.TemporaryDirectory() as tmp:
@@ -402,7 +404,7 @@ def main():
             n += frames
         writer.close()
         add_sounds(silent, sounds, out)
-    print(out)
+    print(f"rendered {out} ({n / FPS:.1f}s)")
     if args.upload:
         publish_at = next_publish_time(datetime.now(PUBLISH_TZ))
         video_id = upload(

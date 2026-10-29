@@ -19,6 +19,7 @@ jobs:
       # picks the lowest puzzle id not in uploaded.txt, uploads it and appends the id
       - run: uv run --locked --no-dev frisian-shorts --upload
         env:
+          PYTHONUNBUFFERED: "1" # show progress lines as they happen, before any error
           YOUTUBE_CLIENT_ID: ${{ secrets.YOUTUBE_CLIENT_ID }}
           YOUTUBE_CLIENT_SECRET: ${{ secrets.YOUTUBE_CLIENT_SECRET }}
           YOUTUBE_REFRESH_TOKEN: ${{ secrets.YOUTUBE_REFRESH_TOKEN }}
