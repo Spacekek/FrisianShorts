@@ -3,6 +3,9 @@ Fetches a Frisian draughts puzzle from [lidraughts](https://lidraughts.org/train
 
 Puzzles come from lidraughts' JSON endpoint, the board is drawn with Pillow, and the video is encoded with the ffmpeg binary bundled in `imageio-ffmpeg`.
 
+## AI disclosure
+This project was made with quite a lot of LLM help, it's a personal project I just wanted to finish.
+
 ## Usage
 Requires [uv](https://docs.astral.sh/uv/).
 ```bash
